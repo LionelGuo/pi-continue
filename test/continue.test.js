@@ -288,6 +288,42 @@ test("repeated continuations skip all old failures and mark only each latest par
   });
 });
 
+test("/continue starts a successful recovery through the RPC session mode", async () => {
+  await withFixture({
+    partial: fauxAssistantMessage("partial response", { stopReason: "error" }),
+    priorTool: false,
+    mode: "rpc",
+  }, async (fixture) => {
+    fixture.faux.setResponses([
+      (context, _options, _state, model) => {
+        fixture.providerTranscripts.push(transformMessages(context.messages, model));
+        return fauxAssistantMessage("recovered response", { stopReason: "stop" });
+      },
+    ]);
+
+    await fixture.session.prompt("/continue");
+    await fixture.session.waitForIdle();
+
+    assert.equal(fixture.faux.state.callCount, 1);
+    assert.equal(fixture.notifications.length, 0);
+    assert.equal(fixture.providerTranscripts.length, 1);
+    const messages = fixture.providerTranscripts[0].filter((message) => message.role !== "system");
+    assert.deepEqual(messages.map((message) => message.role), ["user"]);
+    assert.equal(JSON.stringify(messages).includes("partial response"), false);
+    assert.equal(JSON.stringify(messages).includes("pi-continue-trigger"), false);
+
+    const entries = fixture.sessionManager.getEntries();
+    const marker = entries.find((entry) => entry.type === "custom" && entry.customType === "pi-continue");
+    const trigger = entries.find((entry) => entry.type === "custom_message" && entry.customType === "pi-continue-trigger");
+    assert.ok(marker);
+    assert.ok(trigger);
+    const edit = entries.find((entry) => entry.type === "context_edit" && entry.targetId === trigger.id);
+    assert.equal(marker.data.stopReason, "error");
+    assert.ok(edit);
+    assert.equal(edit.replacement, null);
+  });
+});
+
 test("a completed continuation cannot be continued again", async () => {
   await withFixture({
     partial: fauxAssistantMessage("partial", { stopReason: "aborted" }),
