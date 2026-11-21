@@ -24,7 +24,9 @@ export default function registerContinue(pi, { loadTransformMessages = loadShare
         return;
       }
 
-      const partial = findLatestFailedReply(ctx.sessionManager.buildSessionProjection().messages);
+      const { sessionManager } = ctx;
+      const { messages } = sessionManager.buildSessionProjection();
+      const partial = findLatestFailedReply(messages);
       if (!partial) {
         ctx.ui.notify("The latest assistant reply is not aborted or errored.", "info");
         return;
@@ -90,7 +92,8 @@ export default function registerContinue(pi, { loadTransformMessages = loadShare
   });
 
   pi.on("turn_end", (event) => {
-    const trigger = event.context.contextEntries.findLast(
+    const { context: { contextEntries }, entries } = event;
+    const trigger = contextEntries.findLast(
       ({ sourceEntry, messages }) =>
         sourceEntry.type === "custom_message" &&
         sourceEntry.customType === TRIGGER_TYPE &&
@@ -99,7 +102,7 @@ export default function registerContinue(pi, { loadTransformMessages = loadShare
     if (!trigger) return;
     return {
       entries: [
-        ...event.entries,
+        ...entries,
         { type: "context_edit", targetId: trigger.sourceEntry.id, replacement: null },
       ],
     };
@@ -111,30 +114,28 @@ async function passesSharedFilter(model, loadTransformMessages) {
     const { transformMessages } = await loadTransformMessages();
     if (typeof transformMessages !== "function") return false;
 
-    const aborted = assistantFixture(model, "aborted", "aborted fixture");
-    const errored = assistantFixture(model, "error", "error fixture");
+    const aborted = assistantFixture(model, "aborted", "aborted fixture", "pi-continue-filter-aborted");
+    const errored = assistantFixture(model, "error", "error fixture", "pi-continue-filter-error");
+    const fixtureIds = new Set([aborted.responseId, errored.responseId]);
     const filtered = transformMessages([aborted, errored], model);
     return !filtered.some(
       (message) =>
-        message.role === "assistant" &&
-        message.content.some(
-          (block) =>
-            block.type === "text" &&
-            (block.text === "aborted fixture" || block.text === "error fixture"),
-        ),
+        fixtureIds.has(message.responseId) ||
+        (message.role === "assistant" && (message.stopReason === "aborted" || message.stopReason === "error")),
     );
   } catch {
     return false;
   }
 }
 
-function assistantFixture(model, stopReason, text) {
+function assistantFixture(model, stopReason, text, responseId) {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
     api: model.api,
     provider: model.provider,
     model: model.id,
+    responseId,
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
     stopReason,
     timestamp: 0,

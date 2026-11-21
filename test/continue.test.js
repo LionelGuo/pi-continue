@@ -173,12 +173,18 @@ test("/continue refuses when the shared filter keeps failed replies", async () =
     priorTool: false,
     loadTransformMessages: async () => ({
       transformMessages(messages) {
-        return messages;
+        return messages.map((message) => ({
+          ...message,
+          content: [{ type: "text", text: "rewritten fixture" }],
+        }));
       },
     }),
   }, async (fixture) => {
     const before = fixture.sessionManager.getEntryCount();
+    fixture.faux.setResponses([fauxAssistantMessage("unexpected request", { stopReason: "stop" })]);
     await fixture.session.prompt("/continue");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await fixture.session.waitForIdle();
 
     assertRefused(fixture, { before });
   });
